@@ -64,7 +64,7 @@ async function createJob() {
     const description = document.getElementById('job-description').value;
 
     try {
-        await fetch('/jobs', {
+        const res = await fetch('/jobs', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-org-id': 'demo-org', 'x-user-id': 'demo-user', 'x-user-role': 'RECRUITER' },
             body: JSON.stringify({
@@ -72,16 +72,21 @@ async function createJob() {
                 description,
                 jobType: 'FULL_TIME',
                 domain: 'engineering',
-                requirements: [] // Trigger Gemini parsing
+                requirements: []
             })
         });
+        
+        if (!res.ok) {
+            const data = await res.json();
+            throw new Error(data.error || 'Failed to create job');
+        }
         
         closeModal('modal-create-job');
         document.getElementById('job-title').value = '';
         document.getElementById('job-description').value = '';
         fetchJobs();
     } catch (err) {
-        alert("Failed to create job.");
+        alert(err.message || "Failed to create job.");
     } finally {
         btn.classList.remove('loading');
     }
@@ -134,15 +139,45 @@ async function fetchRankings(jobId) {
         snapshot.rankings.forEach(rank => {
             const el = document.createElement('div');
             el.className = 'candidate-row animate-up';
+            el.style.display = 'block'; // Block to stack items
             const scoreColor = rank.rerankScore > 0.8 ? 'var(--accent)' : (rank.rerankScore > 0.5 ? '#f59e0b' : 'var(--danger)');
             
+            // Find score and evidence for this candidate
+            const scoreObj = snapshot.scores ? snapshot.scores.find(s => s.candidateId === rank.candidateId) : null;
+            const evidence = snapshot.evidence ? snapshot.evidence.filter(e => scoreObj && e.scoreId === scoreObj.id) : [];
+            const gaps = evidence.filter(e => e.evidenceText.startsWith("Skill Gap:"));
+            const strongMatches = evidence.filter(e => !e.evidenceText.startsWith("Skill Gap:") && e.evidenceLevel === 'high');
+
+            let detailsHtml = '';
+            if (scoreObj) {
+                detailsHtml = `
+                    <div style="margin-top: 15px; padding: 15px; background: rgba(0,0,0,0.3); border-radius: 8px; font-size: 0.9rem;">
+                        <h5 style="color: var(--accent); margin-bottom: 8px;">Explainable Score Breakdown</h5>
+                        <p style="margin-bottom: 5px;"><strong>Confidence:</strong> ${Math.round(scoreObj.confidenceScore * 100)}%</p>
+                        <p style="margin-bottom: 5px;"><strong>Mandatory Met:</strong> ${scoreObj.mandatoryMet} / ${scoreObj.mandatoryTotal}</p>
+                        ${gaps.length > 0 ? `
+                        <div style="margin-top: 10px; color: var(--danger)">
+                            <strong>Skill Gaps Detected:</strong>
+                            <ul style="margin-left: 20px; margin-top: 5px;">
+                                ${gaps.map(g => `<li>${g.evidenceText.replace("Skill Gap: ", "")}</li>`).join('')}
+                            </ul>
+                        </div>` : '<p style="margin-top: 10px; color: var(--accent)">No major skill gaps detected!</p>'}
+                    </div>
+                `;
+            }
+
             el.innerHTML = `
-                <div>
-                    <h4>Candidate ${rank.candidateId}</h4>
-                    <p style="color: var(--text-muted); font-size: 0.85rem">Stage: ${rank.stage}</p>
+                <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="this.nextElementSibling.style.display = this.nextElementSibling.style.display === 'none' ? 'block' : 'none'">
+                    <div>
+                        <h4>Candidate ${rank.candidateId}</h4>
+                        <p style="color: var(--text-muted); font-size: 0.85rem">Stage: ${rank.stage}</p>
+                    </div>
+                    <div class="score-circle" style="color: ${scoreColor}; border: 2px solid ${scoreColor}; box-shadow: 0 0 15px ${scoreColor}40">
+                        ${Math.round(rank.rerankScore ? rank.rerankScore * 100 : 0)}
+                    </div>
                 </div>
-                <div class="score-circle" style="color: ${scoreColor}; border: 2px solid ${scoreColor}; box-shadow: 0 0 15px ${scoreColor}40">
-                    ${Math.round(rank.rerankScore ? rank.rerankScore * 100 : 0)}
+                <div style="display: none; border-top: 1px solid rgba(255,255,255,0.1); margin-top: 15px; padding-top: 15px;">
+                    ${detailsHtml}
                 </div>
             `;
             list.appendChild(el);
@@ -173,7 +208,7 @@ async function ingestResume() {
             reader.readAsDataURL(file);
         });
 
-        await fetch(`/jobs/${currentJobId}/resumes`, {
+        const ingestRes = await fetch(`/jobs/${currentJobId}/resumes`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'x-org-id': 'demo-org', 'x-user-id': 'demo-user', 'x-user-role': 'RECRUITER' },
             body: JSON.stringify({
@@ -183,6 +218,11 @@ async function ingestResume() {
                 fileData: base64Data
             })
         });
+
+        if (!ingestRes.ok) {
+            const errData = await ingestRes.json();
+            throw new Error(errData.error || "Server error");
+        }
         
         closeModal('modal-ingest-resume');
         document.getElementById('candidate-name').value = '';

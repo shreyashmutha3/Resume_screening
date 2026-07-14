@@ -20,7 +20,7 @@ import {
 } from "../domain";
 import { parseResumeText, type ParsedResumeText } from "../resumeParsing";
 import { parseJobDescription } from "../intelligence/jdAgent";
-import { evaluateCandidateDocument } from "../intelligence/evaluatorAgent";
+import { detectResumeSections } from "../intelligence/sectionDetectorAgent";
 import { generateEvidenceChunks } from "../intelligence/chunker";
 import { retrieveTopEvidence } from "../scoring/hybridEngine";
 import { validateEvidence } from "../scoring/crossEncoder";
@@ -47,6 +47,8 @@ export interface JobSnapshot {
   job: Job;
   requirements: JobRequirement[];
   rankings: RankingResult[];
+  scores?: CandidateScore[];
+  evidence?: ScoreEvidence[];
 }
 
 export interface ResumeIngestInput {
@@ -123,7 +125,9 @@ export class InMemoryResumeScreenerStore {
     }));
 
     if (requirements.length === 0 && input.description) {
+      console.log(`[Job Creation] Parsing job description for ${jobId}...`);
       const parsedJd = await parseJobDescription(jobId, input.description);
+      console.log(`[Job Creation] Successfully parsed JD.`);
       requirements = [...parsedJd.mustHave, ...parsedJd.niceToHave];
     }
 
@@ -152,6 +156,10 @@ export class InMemoryResumeScreenerStore {
       job,
       requirements: this.requirementsByJob.get(jobId) ?? [],
       rankings: this.rankingsByJob.get(jobId) ?? [],
+      scores: this.getScores(jobId, { orgId: context.orgId }),
+      evidence: Array.from(this.evidenceByScore.values()).flat().filter(e => 
+        this.getScores(jobId, { orgId: context.orgId }).map(s => s.id).includes(e.scoreId)
+      ),
     };
   }
 
@@ -226,18 +234,83 @@ export class InMemoryResumeScreenerStore {
       throw new Error("Job not found for this organization");
     }
 
-    let evaluation;
+    let rawText = "";
     try {
-      const requirements = this.requirementsByJob.get(input.jobId) || [];
-      evaluation = await evaluateCandidateDocument(
-        input.fileData || "",
-        input.fileType || "application/pdf",
-        requirements
-      );
+      const buffer = Buffer.from(input.fileData || "", 'base64');
+      if (input.fileType === "application/pdf" || (!input.fileType || input.fileType === "application/octet-stream")) {
+        const pdfParse = require("pdf-parse");
+        const parsed = await pdfParse(buffer);
+        rawText = parsed.text;
+      } else {
+        rawText = buffer.toString('utf-8');
+      }
     } catch (e) {
-      console.error("Evaluation failed:", e);
+      console.warn("Failed to extract text natively, falling back.", e);
+      rawText = "Error extracting text";
+    }
+
+    let digitalProfile;
+    try {
+      digitalProfile = await detectResumeSections(rawText);
+    } catch (e) {
+      console.error("Section detection failed:", e);
       throw e;
     }
+
+    const chunks = generateEvidenceChunks(input.candidateId, digitalProfile as any);
+    const requirements = this.requirementsByJob.get(input.jobId) || [];
+    
+    let totalScore = 0;
+    let totalWeight = 0;
+    let mandatoryMet = 0;
+    let mandatoryTotal = 0;
+    const allEvidence: ScoreEvidence[] = [];
+    const matchedSkills: string[] = [];
+
+    for (const req of requirements) {
+      const weight = req.importance === "MANDATORY" ? 1.5 : (req.importance === "IMPORTANT" ? 1.0 : 0.5);
+      totalWeight += weight;
+      if (req.importance === "MANDATORY") mandatoryTotal++;
+
+      const topEvidenceChunks = await retrieveTopEvidence(req, chunks, 3);
+      const validation = await validateEvidence(req, topEvidenceChunks);
+
+      totalScore += validation.fitScore * weight;
+
+      if (validation.fitScore >= 0.7) {
+        if (req.importance === "MANDATORY") mandatoryMet++;
+        matchedSkills.push(req.rawText);
+      }
+
+      allEvidence.push({
+        id: this.createId("evidence"),
+        scoreId: "pending", // will map later
+        requirementId: req.id,
+        evidenceText: topEvidenceChunks.map(c => c.text).join(" ... ") || "No strong evidence found.",
+        evidenceLevel: validation.fitScore >= 0.8 ? "high" : (validation.fitScore >= 0.5 ? "medium" : "low"),
+        matchType: "semantic",
+        rawScore: validation.fitScore,
+        weight: weight,
+        contribution: validation.fitScore * weight,
+      });
+      
+      // Add skill gaps as negative evidence if confidence is high but fit is low
+      if (validation.fitScore < 0.5 && validation.skillGaps.length > 0) {
+         allEvidence.push({
+            id: this.createId("evidence"),
+            scoreId: "pending",
+            requirementId: req.id,
+            evidenceText: "Skill Gap: " + validation.skillGaps.join(", "),
+            evidenceLevel: "low",
+            matchType: "keyword",
+            rawScore: 0,
+            weight: 0,
+            contribution: 0,
+         });
+      }
+    }
+
+    const finalScore = totalWeight > 0 ? (totalScore / totalWeight) : 0;
 
     const resume: Resume = {
       id: this.createId("resume"),
@@ -246,7 +319,7 @@ export class InMemoryResumeScreenerStore {
       filePath: input.filePath,
       fileType: input.fileType,
       status: "PARSED",
-      rawText: "Evaluated natively via Gemini Vision/Document OCR.",
+      rawText: rawText.substring(0, 500) + "... [truncated]",
       parsedAt: new Date(),
     };
 
@@ -254,38 +327,28 @@ export class InMemoryResumeScreenerStore {
       id: this.createId("score"),
       candidateId: input.candidateId,
       jobId: input.jobId,
-      overallScore: evaluation.score,
-      skillScore: evaluation.score,
-      experienceScore: evaluation.score,
-      projectScore: evaluation.score,
-      educationScore: evaluation.score,
-      semanticScore: evaluation.score,
-      mandatoryScore: evaluation.score,
-      evidenceScore: evaluation.score,
-      confidenceScore: 0.9,
-      mandatoryMet: evaluation.matchedSkills.length,
-      mandatoryTotal: evaluation.matchedSkills.length,
-      scoringVersion: "gemini-ocr-v1",
+      overallScore: finalScore,
+      skillScore: finalScore,
+      experienceScore: finalScore,
+      projectScore: finalScore,
+      educationScore: finalScore,
+      semanticScore: finalScore,
+      mandatoryScore: mandatoryTotal > 0 ? (mandatoryMet / mandatoryTotal) : 1,
+      evidenceScore: finalScore,
+      confidenceScore: 0.85,
+      mandatoryMet,
+      mandatoryTotal,
+      scoringVersion: "hybrid-rag-v1",
       weightsUsed: {},
       rankedAt: new Date(),
     };
 
-    const evidence: ScoreEvidence = {
-      id: this.createId("evidence"),
-      scoreId: candidateScore.id,
-      requirementId: "overall-reasoning",
-      evidenceText: evaluation.reasoning,
-      evidenceLevel: "high",
-      matchType: "semantic",
-      rawScore: evaluation.score,
-      weight: 1.0,
-      contribution: evaluation.score,
-    };
+    allEvidence.forEach(e => e.scoreId = candidateScore.id);
 
     const score = {
       candidateScore,
       scoreComponents: [],
-      scoreEvidence: [evidence],
+      scoreEvidence: allEvidence,
     };
 
     this.storeResume(input.jobId, resume);
@@ -294,7 +357,7 @@ export class InMemoryResumeScreenerStore {
 
     return {
       resume,
-      parsed: { detectedSkills: evaluation.matchedSkills, sectionLines: { experience: [], education: [], projects: [], skills: [] }, summary: "" },
+      parsed: { detectedSkills: matchedSkills, sectionLines: { experience: [], education: [], projects: [], skills: [] }, summary: "" },
       candidateSkills: [],
       candidateExperience: [],
       candidateProjects: [],
@@ -437,7 +500,7 @@ export class InMemoryResumeScreenerStore {
       rank: index + 1,
       scoreId: score.id,
       stage,
-      rerankScore: stage === "RERANKED" ? score.overallScore : undefined,
+      rerankScore: score.overallScore,
       createdAt: new Date(),
     }));
 

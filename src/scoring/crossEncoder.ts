@@ -30,7 +30,7 @@ export async function validateEvidence(
   };
 
   const model = genAI.getGenerativeModel({
-    model: "gemini-2.5-flash",
+    model: "gemini-flash-lite-latest",
     generationConfig: {
       responseMimeType: "application/json",
       responseSchema,
@@ -56,13 +56,36 @@ export async function validateEvidence(
   - confidence (0.0 to 1.0)
   `;
 
-  const result = await model.generateContent(prompt);
-  const responseText = result.response.text();
+  let result;
+  try {
+    result = await Promise.race([
+      model.generateContent(prompt),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 10000))
+    ]);
+  } catch (err) {
+    console.warn("[crossEncoder] Timeout or API Error. Using fallback.", err);
+    return {
+      fitScore: 0.5,
+      skillGaps: ["Validation failed due to API timeout or error."],
+      confidence: 0.5
+    };
+  }
+
+  const responseText = (result as any).response.text();
   
   if (!responseText) {
     throw new Error("Empty response from Gemini.");
   }
   
-  return JSON.parse(responseText) as ExplainableScore;
+  try {
+    return JSON.parse(responseText) as ExplainableScore;
+  } catch (err) {
+    console.error("Failed to parse cross encoder response:", responseText);
+    return {
+      fitScore: 0.5,
+      skillGaps: ["Failed to parse AI response."],
+      confidence: 0.5
+    };
+  }
 }
 

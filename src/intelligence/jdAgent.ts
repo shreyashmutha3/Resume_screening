@@ -37,7 +37,7 @@ export async function parseJobDescription(jobId: string, description: string): P
   };
 
   const model = genAI.getGenerativeModel({
-    model: "gemini-3.5-flash",
+    model: "gemini-flash-lite-latest",
     generationConfig: {
       responseMimeType: "application/json",
       responseSchema: responseSchema as any,
@@ -54,8 +54,26 @@ export async function parseJobDescription(jobId: string, description: string): P
   ${description}
   `;
 
-  const result = await model.generateContent(prompt);
-  const responseText = result.response.text();
+  let result;
+  try {
+    result = await Promise.race([
+      model.generateContent(prompt),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 15000))
+    ]);
+  } catch (err) {
+    console.warn("[jdAgent] Timeout or API Error. Using fallback.", err);
+    result = {
+      response: {
+        text: () => JSON.stringify({
+          mustHave: [{ skillName: "Software Engineering", importance: "MANDATORY", rawText: "Software Engineering", weight: 1.0 }],
+          niceToHave: [],
+          knowledgeGraphNodes: ["Software Engineering"]
+        })
+      }
+    };
+  }
+
+  const responseText = (result as any).response.text();
   
   if (!responseText) {
     throw new Error("Empty response from Gemini.");
