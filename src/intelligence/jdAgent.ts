@@ -37,10 +37,10 @@ export async function parseJobDescription(jobId: string, description: string): P
   };
 
   const model = genAI.getGenerativeModel({
-    model: "gemini-flash-latest",
+    model: "gemini-3.5-flash",
     generationConfig: {
       responseMimeType: "application/json",
-      responseSchema,
+      responseSchema: responseSchema as any,
     },
   });
 

@@ -192,22 +192,12 @@ async function handleRequest(
     const body = (await readJson(request)) as any;
 
     let filePath = body.filePath || "";
-    if (body.fileData && body.fileName) {
-      const { writeFile } = require("node:fs/promises");
-      const { join } = require("node:path");
-      
-      const buffer = Buffer.from(body.fileData, "base64");
-      const timestamp = Date.now();
-      const safeFileName = body.fileName.replace(/[^a-zA-Z0-9.\-_]/g, "_");
-      filePath = join(process.cwd(), "uploads", `${timestamp}_${safeFileName}`);
-      await writeFile(filePath, buffer);
-    }
-
     const ingestInput: Omit<ResumeIngestInput, "jobId"> = {
       candidateId: body.candidateId,
-      filePath: filePath,
+      filePath: body.fileName || "uploaded-file",
       fileType: body.fileType || "application/octet-stream",
-      rawText: body.rawText,
+      rawText: "",
+      fileData: body.fileData
     };
 
     const result = await defaultResumeScreenerStore.ingestResume(

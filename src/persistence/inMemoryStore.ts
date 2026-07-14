@@ -20,7 +20,7 @@ import {
 } from "../domain";
 import { parseResumeText, type ParsedResumeText } from "../resumeParsing";
 import { parseJobDescription } from "../intelligence/jdAgent";
-import { extractTextFromFile } from "../parsing/fileExtractor";
+import { evaluateCandidateDocument } from "../intelligence/evaluatorAgent";
 import { generateEvidenceChunks } from "../intelligence/chunker";
 import { retrieveTopEvidence } from "../scoring/hybridEngine";
 import { validateEvidence } from "../scoring/crossEncoder";
@@ -55,6 +55,7 @@ export interface ResumeIngestInput {
   filePath: string;
   fileType: string;
   rawText: string;
+  fileData?: string;
 }
 
 export interface ResumeIngestResult {
@@ -225,12 +226,19 @@ export class InMemoryResumeScreenerStore {
       throw new Error("Job not found for this organization");
     }
 
-    let rawText = input.rawText;
-    if (!rawText) {
-      rawText = await extractTextFromFile(input.filePath);
+    let evaluation;
+    try {
+      const requirements = this.requirementsByJob.get(input.jobId) || [];
+      evaluation = await evaluateCandidateDocument(
+        input.fileData || "",
+        input.fileType || "application/pdf",
+        requirements
+      );
+    } catch (e) {
+      console.error("Evaluation failed:", e);
+      throw e;
     }
 
-    const parsed = parseResumeText(rawText);
     const resume: Resume = {
       id: this.createId("resume"),
       candidateId: input.candidateId,
@@ -238,134 +246,59 @@ export class InMemoryResumeScreenerStore {
       filePath: input.filePath,
       fileType: input.fileType,
       status: "PARSED",
-      rawText: rawText,
+      rawText: "Evaluated natively via Gemini Vision/Document OCR.",
       parsedAt: new Date(),
     };
 
-    const candidateSkills = parsed.detectedSkills.map((skillName, index) => ({
-      id: this.createId(`cand-skill-${index + 1}`),
-      candidateId: input.candidateId,
-      skillId: normalizeSkillId(skillName),
-      evidenceText: parsed.sectionLines.skills.join(" | ") || skillName,
-      evidenceLevel: "high",
-      proficiencyScore: 0.8,
-      yearsUsed: 0,
-      sourceSection: parsed.sectionLines.skills.length > 0 ? "skills" : "summary",
-    }));
-
-    const candidateExperience = buildSimpleItems<CandidateExperience>(
-      this,
-      input.candidateId,
-      parsed.sectionLines.experience,
-      "cand-exp",
-      (value) => ({
-        company: value,
-        title: value,
-        durationMonths: 0,
-        responsibilities: parsed.sectionLines.experience,
-        domain: job.domain,
-        isCurrent: false,
-        relevanceScore: 0.5,
-      }),
-    );
-
-    const candidateProjects = buildSimpleItems<CandidateProject>(
-      this,
-      input.candidateId,
-      parsed.sectionLines.projects,
-      "cand-proj",
-      (value) => ({
-        title: value,
-        description: value,
-        techStack: parsed.detectedSkills,
-        impact: undefined,
-        url: undefined,
-        relevanceScore: 0.5,
-        skillsDemonstrated: parsed.detectedSkills,
-      }),
-    );
-
-    const candidateEducation = buildSimpleItems<CandidateEducation>(
-      this,
-      input.candidateId,
-      parsed.sectionLines.education,
-      "cand-edu",
-      (value) => ({
-        institution: value,
-        degree: value,
-        field: value,
-        gpa: undefined,
-        year: undefined,
-      }),
-    );
-
-    this.storeResume(input.jobId, resume);
-    this.candidateSkillsByCandidate.set(input.candidateId, candidateSkills);
-    this.candidateExperienceByCandidate.set(input.candidateId, candidateExperience);
-    this.candidateProjectsByCandidate.set(input.candidateId, candidateProjects);
-    this.candidateEducationByCandidate.set(input.candidateId, candidateEducation);
-
-    const requirements = this.requirementsByJob.get(input.jobId) ?? [];
-    
-    // AI Pipeline Integration
-    const chunks = generateEvidenceChunks(input.candidateId, parsed.sectionLines);
-    
-    const matchedRequirements = [];
-    let avgFitScore = 0;
-    let avgConfidence = 0;
-    
-    for (const req of requirements) {
-      const topEvidence = await retrieveTopEvidence(req, chunks);
-      const validation = await validateEvidence(req, topEvidence);
-      
-      avgFitScore += validation.fitScore;
-      avgConfidence += validation.confidence;
-      
-      if (topEvidence.length > 0) {
-        matchedRequirements.push({
-          requirementId: req.id,
-          skillId: req.skillId,
-          evidenceText: topEvidence[0].text,
-          evidenceLevel: validation.fitScore > 0.8 ? "high" : "medium",
-          matchType: "semantic",
-          rawScore: validation.fitScore,
-          contribution: validation.fitScore * req.weight,
-        });
-      }
-    }
-    
-    if (requirements.length > 0) {
-      avgFitScore /= requirements.length;
-      avgConfidence /= requirements.length;
-    } else {
-      avgFitScore = 1;
-      avgConfidence = 1;
-    }
-    
-    // Mix with deterministic score signals
-    const signals = deriveResumeSignals(parsed);
-    signals.semanticScore = avgFitScore; 
-    signals.confidenceScore = avgConfidence;
-
-    const score = calculateScoringResult({
+    const candidateScore: CandidateScore = {
+      id: this.createId("score"),
       candidateId: input.candidateId,
       jobId: input.jobId,
-      requirements,
-      matchedRequirements,
-      signals,
-      scoringVersion: "ai-pipeline-v1",
-    });
+      overallScore: evaluation.score,
+      skillScore: evaluation.score,
+      experienceScore: evaluation.score,
+      projectScore: evaluation.score,
+      educationScore: evaluation.score,
+      semanticScore: evaluation.score,
+      mandatoryScore: evaluation.score,
+      evidenceScore: evaluation.score,
+      confidenceScore: 0.9,
+      mandatoryMet: evaluation.matchedSkills.length,
+      mandatoryTotal: evaluation.matchedSkills.length,
+      scoringVersion: "gemini-ocr-v1",
+      weightsUsed: {},
+      rankedAt: new Date(),
+    };
 
+    const evidence: ScoreEvidence = {
+      id: this.createId("evidence"),
+      scoreId: candidateScore.id,
+      requirementId: "overall-reasoning",
+      evidenceText: evaluation.reasoning,
+      evidenceLevel: "high",
+      matchType: "semantic",
+      rawScore: evaluation.score,
+      weight: 1.0,
+      contribution: evaluation.score,
+    };
+
+    const score = {
+      candidateScore,
+      scoreComponents: [],
+      scoreEvidence: [evidence],
+    };
+
+    this.storeResume(input.jobId, resume);
     this.storeScore(score);
-    this.rankJobCandidates(input.jobId);
+    this.rankJobCandidates(input.jobId, "INITIAL");
 
     return {
       resume,
-      parsed,
-      candidateSkills,
-      candidateExperience,
-      candidateProjects,
-      candidateEducation,
+      parsed: { detectedSkills: evaluation.matchedSkills, sectionLines: { experience: [], education: [], projects: [], skills: [] }, summary: "" },
+      candidateSkills: [],
+      candidateExperience: [],
+      candidateProjects: [],
+      candidateEducation: [],
       score,
     };
   }
