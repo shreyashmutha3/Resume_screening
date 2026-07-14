@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Resume Screener Dashboard</title>
+    <meta name="description" content="Premium dashboard for AI-driven resume screening and job matching.">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar glass">
+            <div class="logo">
+                <span class="logo-icon">✨</span>
+                <h1>AI Screener</h1>
+            </div>
+            <nav class="nav-links">
+                <button class="nav-item active" onclick="loadView('dashboard')">
+                    <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path></svg>
+                    Dashboard
+                </button>
+                <button class="nav-item" onclick="loadView('jobs')">
+                    <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+                    Jobs
+                </button>
+            </nav>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="content-area">
+            <header class="topbar glass">
+                <h2>Welcome, Recruiter</h2>
+                <div class="user-profile">
+                    <img src="https://ui-avatars.com/api/?name=Recruiter&background=6366f1&color=fff" alt="User">
+                </div>
+            </header>
+
+            <div id="view-dashboard" class="view active">
+                <section class="stats-grid">
+                    <div class="stat-card glass animate-up" style="--delay: 0.1s">
+                        <h3>Total Jobs</h3>
+                        <p id="total-jobs">0</p>
+                    </div>
+                    <div class="stat-card glass animate-up" style="--delay: 0.2s">
+                        <h3>Total Resumes</h3>
+                        <p id="total-resumes">0</p>
+                    </div>
+                    <div class="stat-card glass animate-up" style="--delay: 0.3s">
+                        <h3>Avg Match Score</h3>
+                        <p id="avg-score">0%</p>
+                    </div>
+                </section>
+            </div>
+
+            <div id="view-jobs" class="view">
+                <div class="header-action">
+                    <h3>Active Jobs</h3>
+                    <button class="btn btn-primary" onclick="showCreateJobModal()">+ Create Job</button>
+                </div>
+                <div id="jobs-list" class="jobs-grid">
+                    <!-- Jobs will be injected here -->
+                </div>
+            </div>
+
+            <div id="view-job-details" class="view">
+                <button class="btn btn-icon" onclick="loadView('jobs')">← Back to Jobs</button>
+                <div id="job-details-container" class="job-details-card glass animate-up">
+                    <!-- Job Details -->
+                </div>
+
+                <div class="header-action" style="margin-top: 2rem;">
+                    <h3>Candidate Pipeline</h3>
+                    <button class="btn btn-secondary" onclick="showIngestResumeModal()">+ Ingest Resume</button>
+                </div>
+
+                <div id="candidate-list" class="candidate-list">
+                    <!-- Candidates will be injected here -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <div id="modal-create-job" class="modal-overlay">
+        <div class="modal glass animate-scale">
+            <div class="modal-header">
+                <h3>Create New Job</h3>
+                <button class="btn-close" onclick="closeModal('modal-create-job')">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Job Title</label>
+                    <input type="text" id="job-title" placeholder="e.g. Senior Frontend Engineer" class="glass-input">
+                </div>
+                <div class="form-group">
+                    <label>Job Description</label>
+                    <textarea id="job-description" rows="5" placeholder="Paste the full JD here. Our AI will automatically extract Must-Haves and Nice-to-Haves." class="glass-input"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('modal-create-job')">Cancel</button>
+                <button class="btn btn-primary" onclick="createJob()" id="btn-create-job">Generate Requirements</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="modal-ingest-resume" class="modal-overlay">
+        <div class="modal glass animate-scale">
+            <div class="modal-header">
+                <h3>Ingest Resume</h3>
+                <button class="btn-close" onclick="closeModal('modal-ingest-resume')">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Candidate Name</label>
+                    <input type="text" id="candidate-name" placeholder="e.g. Jane Doe" class="glass-input">
+                </div>
+                <div class="form-group">
+                    <label>Upload Resume (PDF, DOCX, TXT)</label>
+                    <input type="file" id="resume-file" accept=".pdf,.docx,.txt" class="glass-input">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('modal-ingest-resume')">Cancel</button>
+                <button class="btn btn-primary" onclick="ingestResume()" id="btn-ingest-resume">Analyze & Score</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
