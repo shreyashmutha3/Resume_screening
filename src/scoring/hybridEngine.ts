@@ -29,7 +29,8 @@ function calculateLexicalScore(query: string, text: string): number {
 export async function retrieveTopEvidence(
   requirement: JobRequirement,
   chunks: EvidenceChunk[],
-  k: number = 3
+  k: number = 3,
+  precomputedChunkEmbeddings?: number[][]
 ): Promise<RankedEvidence[]> {
   if (chunks.length === 0) return [];
 
@@ -37,7 +38,7 @@ export async function retrieveTopEvidence(
   const [reqEmbedding] = await generateEmbeddings([requirement.rawText]);
   
   // Generate embeddings for all chunks (in a real system, these would be pre-computed and stored in pgvector)
-  const chunkEmbeddings = await generateEmbeddings(chunks.map(c => c.text));
+  const chunkEmbeddings = precomputedChunkEmbeddings || await generateEmbeddings(chunks.map(c => c.text));
 
   const scoredChunks = chunks.map((chunk, index) => {
     const semanticScore = cosineSimilarity(reqEmbedding, chunkEmbeddings[index]);

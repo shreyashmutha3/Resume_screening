@@ -260,6 +260,13 @@ export class InMemoryResumeScreenerStore {
     const chunks = generateEvidenceChunks(input.candidateId, digitalProfile as any);
     const requirements = this.requirementsByJob.get(input.jobId) || [];
     
+    // Precompute chunk embeddings to avoid API rate limits inside the requirements loop
+    let chunkEmbeddings: number[][] = [];
+    if (chunks.length > 0) {
+       const { generateEmbeddings } = require("../intelligence/embeddings");
+       chunkEmbeddings = await generateEmbeddings(chunks.map(c => c.text));
+    }
+    
     let totalScore = 0;
     let totalWeight = 0;
     let mandatoryMet = 0;
@@ -272,7 +279,7 @@ export class InMemoryResumeScreenerStore {
       totalWeight += weight;
       if (req.importance === "MANDATORY") mandatoryTotal++;
 
-      const topEvidenceChunks = await retrieveTopEvidence(req, chunks, 3);
+      const topEvidenceChunks = await retrieveTopEvidence(req, chunks, 3, chunkEmbeddings);
       const validation = await validateEvidence(req, topEvidenceChunks);
 
       totalScore += validation.fitScore * weight;

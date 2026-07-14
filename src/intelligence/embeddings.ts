@@ -12,17 +12,16 @@ export async function generateEmbeddings(texts: string[]): Promise<number[][]> {
   // text-embedding-004 supports outputDimensionality. We set it to 384 to match pgvector schema.
   const model = genAI.getGenerativeModel({ model: "gemini-embedding-2" });
 
-  const results = await Promise.all(
-    texts.map(text => 
-      model.embedContent({
-        content: { role: "user", parts: [{ text }] },
-        taskType: TaskType.RETRIEVAL_DOCUMENT,
-        outputDimensionality: 384,
-      } as any)
-    )
-  );
+  const batchRequest = {
+    requests: texts.map(text => ({
+      content: { role: "user", parts: [{ text }] },
+      taskType: TaskType.RETRIEVAL_DOCUMENT,
+      outputDimensionality: 384,
+    }))
+  };
 
-  return results.map(result => result.embedding.values);
+  const response = await model.batchEmbedContents(batchRequest as any);
+  return response.embeddings.map(e => e.values);
 }
 
 export function cosineSimilarity(vecA: number[], vecB: number[]): number {
