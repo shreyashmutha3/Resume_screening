@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: resume-screener-api
+    env: docker
+    region: oregon
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: AUTH_TOKENS
+        sync: false
+      - key: PORT
+        value: 3000
+      - key: DEV_MODE
+        value: "false"

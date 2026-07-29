@@ -47,7 +47,7 @@ export function getMigrationSummary(directory = defaultMigrationDirectory()): Ar
 }
 
 function defaultMigrationDirectory(): string {
-  return join(process.cwd(), "database");
+  return join(__dirname, "..", "..", "database");
 }
 
 function compareMigrationNames(left: string, right: string): number {

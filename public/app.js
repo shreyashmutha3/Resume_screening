@@ -31,7 +31,7 @@ function closeModal(modalId) {
 // API Calls
 async function fetchJobs() {
     try {
-        const res = await fetch('/jobs', { headers: { 'x-org-id': 'demo-org' } });
+        const res = await fetch('/jobs', { headers: { 'x-api-key': 'test-token-recruiter-123', 'x-org-id': 'demo-org' } });
         const data = await res.json();
         
         const grid = document.getElementById('jobs-list');
@@ -66,7 +66,7 @@ async function createJob() {
     try {
         const res = await fetch('/jobs', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-org-id': 'demo-org', 'x-user-id': 'demo-user', 'x-user-role': 'RECRUITER' },
+            headers: { 'Content-Type': 'application/json', 'x-api-key': 'test-token-recruiter-123', 'x-org-id': 'demo-org', 'x-user-id': 'demo-user', 'x-user-role': 'RECRUITER' },
             body: JSON.stringify({
                 title,
                 description,
@@ -97,7 +97,7 @@ async function loadJobDetails(jobId) {
     loadView('job-details');
     
     try {
-        const res = await fetch(`/jobs/${jobId}`, { headers: { 'x-org-id': 'demo-org' } });
+        const res = await fetch(`/jobs/${jobId}`, { headers: { 'x-api-key': 'test-token-recruiter-123', 'x-org-id': 'demo-org' } });
         const data = await res.json();
         
         const container = document.getElementById('job-details-container');
@@ -122,10 +122,7 @@ async function loadJobDetails(jobId) {
 
 async function fetchRankings(jobId) {
     try {
-        const res = await fetch(`/jobs/${jobId}/resumes`, { headers: { 'x-org-id': 'demo-org' } });
-        const data = await res.json(); // Wait, the backend doesn't return rankings on this route. Let's adjust based on what we have.
-        // Actually, we can fetch from /jobs/:jobId snapshot for rankings
-        const snapshotRes = await fetch(`/jobs/${jobId}`, { headers: { 'x-org-id': 'demo-org' } });
+        const snapshotRes = await fetch(`/jobs/${jobId}`, { headers: { 'x-api-key': 'test-token-recruiter-123', 'x-org-id': 'demo-org' } });
         const snapshot = await snapshotRes.json();
         
         const list = document.getElementById('candidate-list');
@@ -210,7 +207,7 @@ async function ingestResume() {
 
         const ingestRes = await fetch(`/jobs/${currentJobId}/resumes`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-org-id': 'demo-org', 'x-user-id': 'demo-user', 'x-user-role': 'RECRUITER' },
+            headers: { 'Content-Type': 'application/json', 'x-api-key': 'test-token-recruiter-123', 'x-org-id': 'demo-org', 'x-user-id': 'demo-user', 'x-user-role': 'RECRUITER' },
             body: JSON.stringify({
                 candidateId,
                 fileName: file.name,

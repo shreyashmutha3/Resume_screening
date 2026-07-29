@@ -10,6 +10,7 @@ import {
   type ResumeIngestInput,
   type ScoreCandidateInput,
 } from "./persistence";
+import { generateEmbeddings } from "./intelligence/embeddings";
 
 interface JsonResponse {
   status: number;
@@ -24,13 +25,65 @@ export interface ResumeScreenerServerOptions {
 }
 
 export function createResumeScreenerServer() {
+  const rateLimits = new Map<string, { count: number, resetAt: number }>();
+  const RATE_LIMIT_WINDOW = 60000;
+  const RATE_LIMIT_MAX = 20;
+
+  function checkRateLimit(orgId: string): boolean {
+    const now = Date.now();
+    let entry = rateLimits.get(orgId);
+    if (!entry || now > entry.resetAt) {
+      entry = { count: 0, resetAt: now + RATE_LIMIT_WINDOW };
+      rateLimits.set(orgId, entry);
+    }
+    entry.count++;
+    return entry.count <= RATE_LIMIT_MAX;
+  }
+
+  const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()) : [];
+
   return createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
     const method = request.method ?? "GET";
 
     try {
-      const context = parseRequestContext(request.headers);
+      const isPublicPath = url.pathname === "/health" || url.pathname === "/migrations" || (!url.pathname.startsWith("/jobs") && !url.pathname.startsWith("/me"));
+      
+      let context: any;
+      if (!isPublicPath) {
+        context = parseRequestContext(request.headers);
+        
+        if (method === "POST" && (url.pathname === "/jobs" || url.pathname.match(/^\/jobs\/[^/]+\/resumes$/) || url.pathname.match(/^\/jobs\/[^/]+\/score$/))) {
+          if (!checkRateLimit(context.orgId)) {
+            writeJson(response, 429, { error: "Too Many Requests" });
+            return;
+          }
+        }
+      }
+
+      if (method === "OPTIONS") {
+        const origin = request.headers.origin;
+        if (origin && allowedOrigins.includes(origin)) {
+          response.setHeader("Access-Control-Allow-Origin", origin);
+          response.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+          response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, x-org-id, x-user-id, x-user-role");
+        }
+        response.statusCode = 204;
+        response.end();
+        return;
+      }
+
       const result = await handleRequest(method, url.pathname, request, context);
+
+      if (url.pathname.startsWith("/jobs") || url.pathname.startsWith("/me") || url.pathname === "/health" || url.pathname === "/migrations") {
+        const origin = request.headers.origin;
+        if (origin && allowedOrigins.includes(origin)) {
+          response.setHeader("Access-Control-Allow-Origin", origin);
+          response.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+          response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, x-api-key, x-org-id, x-user-id, x-user-role");
+        }
+      }
+
       if (result.bodyRaw) {
         response.statusCode = result.status;
         if (result.headers) {
@@ -65,6 +118,15 @@ export async function main(options: ResumeScreenerServerOptions = {}): Promise<v
     process.exit(1);
   }
 
+  console.log("Running embedding model self-check...");
+  try {
+    await generateEmbeddings(["self-check"]);
+    console.log("Embedding model self-check passed.");
+  } catch (err: any) {
+    console.error("\n❌ ERROR: Embedding model self-check failed:", err.message);
+    process.exit(1);
+  }
+
   const port = options.port ?? Number(process.env.PORT ?? 3000);
   const host = options.host ?? "0.0.0.0";
 
@@ -77,6 +139,12 @@ export async function main(options: ResumeScreenerServerOptions = {}): Promise<v
   });
 
   process.stdout.write(`Resume screener API listening on http://${host}:${port}\n`);
+  console.warn("\n===========================================================");
+  console.warn("⚠️ WARNING: IN-MEMORY STORAGE ONLY");
+  console.warn("All job, resume, and score data is stored in memory and");
+  console.warn("will be permanently LOST when this server process restarts,");
+  console.warn("crashes, or is put to sleep by your hosting provider.");
+  console.warn("===========================================================\n");
 }
 
 async function handleRequest(
@@ -125,6 +193,10 @@ async function handleRequest(
     }
 
     const body = (await readJson(request)) as CreateJobInput;
+    if (!body.title || !body.description) {
+      return { status: 400, body: { error: "title and description are required" } };
+    }
+
     const snapshot = await defaultResumeScreenerStore.createJob({
       ...body,
       orgId: context.orgId,
@@ -144,6 +216,10 @@ async function handleRequest(
 
     if (!canScoreCandidates(context)) {
       throw new AuthorizationError("Scoring candidates requires recruiter or admin access");
+    }
+
+    if (!body.candidateId) {
+      return { status: 400, body: { error: "candidateId is required" } };
     }
 
     const result = defaultResumeScreenerStore.scoreCandidate({
@@ -191,7 +267,10 @@ async function handleRequest(
     const jobId = decodeURIComponent(resumesListMatch[1]);
     const body = (await readJson(request)) as any;
 
-    let filePath = body.filePath || "";
+    if (!body.candidateId || !body.fileData) {
+      return { status: 400, body: { error: "candidateId and fileData are required" } };
+    }
+
     const ingestInput: Omit<ResumeIngestInput, "jobId"> = {
       candidateId: body.candidateId,
       filePath: body.fileName || "uploaded-file",
@@ -239,10 +318,12 @@ async function handleRequest(
 
   // Try serving static files
   try {
-    let filePath = path === "/" ? "/index.html" : path;
-    const fullPath = join(process.cwd(), "public", filePath);
+    let reqPath = path === "/" ? "/index.html" : path;
+    const publicRoot = join(process.cwd(), "public");
+    const fullPath = join(publicRoot, reqPath);
     
-    if (!fullPath.startsWith(join(process.cwd(), "public"))) {
+    const relativePath = require("node:path").relative(publicRoot, fullPath);
+    if (relativePath.startsWith("..") || require("node:path").isAbsolute(relativePath)) {
       throw new Error("Invalid path");
     }
 
